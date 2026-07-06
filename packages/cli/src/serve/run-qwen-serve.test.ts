@@ -567,6 +567,49 @@ dfOrXxrzy0bEsqEN1JpFwcVI4sUXm/JQSxO6mI5osX1e9qGF3p12aK6fWrPwaj1T
 -----END PRIVATE KEY-----
 `;
 
+describe('runQwenServe multi-workspace guard (issue #6378)', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects the yargs array shape from repeated --workspace flags', async () => {
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qws-mw-')));
+    const fakeBridge = {
+      spawnOrAttach: vi.fn(),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+      killAllSync: vi.fn(),
+    } as unknown as HttpAcpBridge;
+
+    const origEnv = process.env['QWEN_RUNTIME_DIR'];
+    process.env['QWEN_RUNTIME_DIR'] = tmpDir;
+    try {
+      await expect(
+        runQwenServe(
+          {
+            port: 0,
+            hostname: '127.0.0.1',
+            mode: 'http-bridge',
+            // yargs collects repeated `--workspace` flags into an array
+            // even though the option is declared `type: 'string'`.
+            workspace: [tmpDir, tmpDir] as unknown as string,
+            maxSessions: 1,
+          },
+          { bridge: fakeBridge },
+        ),
+      ).rejects.toThrow(/Multiple --workspace flags are not supported yet/);
+    } finally {
+      delete process.env['QWEN_RUNTIME_DIR'];
+      if (origEnv !== undefined) {
+        process.env['QWEN_RUNTIME_DIR'] = origEnv;
+      }
+    }
+  });
+});
+
 describe('runQwenServe TLS (--tls-cert / --tls-key)', () => {
   let tmpDir: string;
 

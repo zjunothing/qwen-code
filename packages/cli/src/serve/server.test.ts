@@ -14014,6 +14014,38 @@ describe('runQwenServe SIGINT handler', () => {
   });
 });
 
+describe('createServeApp workspace registry wiring (issue #6378, Phase 1)', () => {
+  it('parks a single-primary WorkspaceRegistry on app.locals', async () => {
+    const { createServeApp } = await import('./server.js');
+    const { WorkspaceRegistry } = await import('./workspace-registry.js');
+    const app = createServeApp(
+      {
+        port: 0,
+        hostname: '127.0.0.1',
+        workspace: '/work/bound',
+      } as Parameters<typeof createServeApp>[0],
+      () => 0,
+    );
+    const registry = (
+      app.locals as {
+        workspaceRegistry?: InstanceType<typeof WorkspaceRegistry>;
+      }
+    ).workspaceRegistry;
+    expect(registry).toBeInstanceOf(WorkspaceRegistry);
+    // The primary runtime is the bound workspace with the same service
+    // objects the app was assembled from.
+    expect(registry!.primary.key).toBe(
+      (app.locals as { boundWorkspace?: string }).boundWorkspace,
+    );
+    expect(registry!.primary.isPrimary).toBe(true);
+    expect(registry!.list()).toHaveLength(1);
+    expect(registry!.primary.fsFactory).toBe(
+      (app.locals as { fsFactory?: unknown }).fsFactory,
+    );
+    expect(registry!.resolveWorkspace(undefined)).toBe(registry!.primary);
+  });
+});
+
 describe('createServeApp ServeAppDeps.fsFactory wiring (#4175 PR 18)', () => {
   it('parks a default WorkspaceFileSystemFactory on app.locals when none is injected', async () => {
     const { createServeApp } = await import('./server.js');

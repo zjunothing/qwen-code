@@ -223,6 +223,23 @@ describe('serve rate limit env parsing', () => {
     ).rejects.toThrow('process.exit(1) called');
     expect(mockRunQwenServe).not.toHaveBeenCalled();
   });
+
+  it('rejects repeated --workspace flags (issue #6378 guard)', async () => {
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`process.exit(${code}) called`);
+    });
+
+    const handler = serveCommand.handler;
+    if (!handler) throw new Error('serve handler missing');
+    const argv = buildParser().parseSync(
+      '--no-web --workspace /work/a --workspace /work/b',
+    );
+
+    await expect(
+      handler(argv as Parameters<typeof handler>[0]),
+    ).rejects.toThrow('process.exit(1) called');
+    expect(mockRunQwenServe).not.toHaveBeenCalled();
+  });
 });
 
 describe('maybeOpenWebShellBrowser', () => {

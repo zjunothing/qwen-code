@@ -349,6 +349,12 @@ export function parseServeFastPathArgs(
       const read = readOptionValue(argv, i, inlineValue);
       if (!read) return { kind: 'fallback' };
       i = read.nextIndex;
+      // Repeated `--workspace` is a multi-workspace request (issue #6378),
+      // not a last-wins override. Fall back to the full yargs parser,
+      // whose handler boot-errors on the array shape with a clear message.
+      if (stringTarget === 'workspace' && options.workspace !== undefined) {
+        return { kind: 'fallback' };
+      }
       setServeOption(options, stringTarget, read.value);
       continue;
     }

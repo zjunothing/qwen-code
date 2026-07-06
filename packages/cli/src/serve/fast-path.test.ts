@@ -664,6 +664,18 @@ describe('serve fast path argument parsing', () => {
     );
   });
 
+  it('falls back on repeated --workspace flags (issue #6378)', () => {
+    const parsed = parseServeFastPathArgs([
+      'serve',
+      '--workspace',
+      '/work/a',
+      '--workspace',
+      '/work/b',
+    ]);
+
+    expect(parsed).toEqual({ kind: 'fallback' });
+  });
+
   it('keeps --experimental-lsp on the fast path', () => {
     const parsed = parseServeFastPathArgs(['serve', '--experimental-lsp']);
 

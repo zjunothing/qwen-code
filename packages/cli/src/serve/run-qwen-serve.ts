@@ -1625,6 +1625,18 @@ export async function runQwenServe(
   // multiple daemon processes, not intra-daemon routing.
   //
   // Boot-loud validation: absolute path, exists, is a directory.
+  //
+  // `--workspace` is declared as a string option, but yargs hands repeated
+  // flags to the handler as an array. Until multi-workspace support lands
+  // (issue #6378), reject that shape explicitly instead of letting an
+  // array flow into the single-workspace path checks below.
+  if (Array.isArray(opts.workspace)) {
+    throw new Error(
+      'Multiple --workspace flags are not supported yet: this daemon binds ' +
+        'to exactly one workspace. Pass a single --workspace (or run one ' +
+        '`qwen serve` per workspace).',
+    );
+  }
   const rawWorkspace = opts.workspace ?? process.cwd();
   if (!path.isAbsolute(rawWorkspace)) {
     throw new Error(

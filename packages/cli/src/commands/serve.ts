@@ -378,6 +378,17 @@ export const serveCommand: CommandModule<unknown, ServeArgs> = {
           'deployment.',
       );
     }
+    // `--workspace` is declared as a string option, but yargs collects
+    // repeated flags into an array. Until multi-workspace support lands
+    // (issue #6378), boot-error on that shape here — before the
+    // `loadSettings(argv.workspace)` warning probe below sees an array.
+    if (Array.isArray(argv.workspace)) {
+      writeStderrLine(
+        'qwen serve: multiple --workspace flags are not supported yet; ' +
+          'pass a single --workspace (or run one `qwen serve` per workspace).',
+      );
+      process.exit(1);
+    }
     let channelSelection: ServeChannelSelection | undefined;
     try {
       channelSelection = normalizeServeChannelSelection(argv.channel);

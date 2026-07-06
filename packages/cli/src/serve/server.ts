@@ -116,6 +116,7 @@ import { installSelfOriginStripMiddleware } from './server/self-origin.js';
 import { registerWorkspaceLifecycleRoutes } from './routes/workspace-lifecycle.js';
 import { registerWorkspaceMcpControlRoutes } from './routes/workspace-mcp-control.js';
 import { registerWorkspaceToolsRoutes } from './routes/workspace-tools.js';
+import { WorkspaceRegistry } from './workspace-registry.js';
 
 export {
   createDefaultFsAuditEmit,
@@ -455,6 +456,23 @@ export function createServeApp(
         bridge.publishWorkspaceEvent(event);
       },
     });
+
+  // Workspace registry (issue #6378, Phase 1): wrap the single bound
+  // workspace's services as the primary runtime. Routes resolve workspace
+  // ownership through this seam; the multi-workspace phases register
+  // additional runtimes here without re-threading every dependency.
+  const workspaceRegistry = new WorkspaceRegistry([
+    {
+      key: boundWorkspace,
+      isPrimary: true,
+      bridge,
+      workspaceService: workspace,
+      fsFactory,
+      clientMcpSenderRegistry,
+    },
+  ]);
+  (app.locals as { workspaceRegistry?: WorkspaceRegistry }).workspaceRegistry =
+    workspaceRegistry;
   // Order matters: rejection guards (CORS / Host allowlist / bearer auth)
   // run BEFORE the JSON body parser. Otherwise an unauthenticated POST
   // gets a full 10MB `JSON.parse` before the 401 fires — a trivially
