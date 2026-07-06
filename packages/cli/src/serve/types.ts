@@ -58,6 +58,17 @@ export interface ServeOptions {
    */
   maxSessions?: number;
   /**
+   * Process-level cap on concurrent live sessions across ALL registered
+   * workspaces (issue #6378). `maxSessions` stays the per-workspace-runtime
+   * cap; this bounds the sum. Defaults to `maxSessions × workspaceCount`
+   * (so single-workspace daemons and one-daemon-per-workspace migrations
+   * keep their capacity expectations), or unlimited when `maxSessions` is
+   * unlimited. Set `0` / `Infinity` to disable. Rejections use the same
+   * 503 + `Retry-After: 5` shape as the per-workspace cap; attaches are
+   * never counted.
+   */
+  maxTotalSessions?: number;
+  /**
    * Per-session cap on accepted prompts that have not settled yet.
    * Defaults to 5. `0` or `Infinity` disables the cap.
    */
@@ -332,6 +343,14 @@ export interface CapabilitiesEnvelope {
    */
   limits?: {
     maxPendingPromptsPerSession?: number | null;
+    /**
+     * Per-workspace-runtime live session cap (issue #6378). This is the
+     * historical `--max-sessions` value; in multi-workspace mode it
+     * applies to each registered workspace independently.
+     */
+    maxSessionsPerWorkspace?: number | null;
+    /** Process-level live session cap across all workspaces (issue #6378). */
+    maxTotalSessions?: number | null;
   };
   /**
    * Language codes accepted by `POST /session/:id/language`.

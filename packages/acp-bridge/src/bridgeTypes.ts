@@ -1047,6 +1047,26 @@ export interface AcpSessionBridge {
   readonly sessionCount: number;
 
   /**
+   * Live sessions plus in-flight spawns/restores — the exact quantity the
+   * per-workspace `maxSessions` gate compares. Multi-workspace daemons sum
+   * this across runtimes for the process-level `maxTotalSessions` cap
+   * (issue #6378). Optional so lightweight test fakes stay valid; the real
+   * bridge always provides it.
+   */
+  readonly sessionCreationLoad?: number;
+
+  /**
+   * Install (or clear) the process-level fresh-session admission hook
+   * (issue #6378). The bridge invokes it synchronously at every gate that
+   * is about to create a NEW session (spawn / restore / branch), after its
+   * own per-workspace `maxSessions` check; attaches never invoke it. The
+   * hook rejects by throwing (typically `SessionLimitExceededError`),
+   * which propagates to the caller exactly like the per-workspace cap.
+   * Optional so lightweight test fakes stay valid.
+   */
+  setFreshSessionAdmission?(hook: (() => void) | undefined): void;
+
+  /**
    * Whether an ACP channel is currently live (spawned and not dying).
    * Distinct from `sessionCount > 0`: a channel can be live with zero
    * attached sessions during the cold-spawn window, and conversely a

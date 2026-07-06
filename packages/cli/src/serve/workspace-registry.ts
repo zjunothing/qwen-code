@@ -81,6 +81,20 @@ export class WorkspaceRegistry {
   }
 
   /**
+   * Sum of every runtime's live + in-flight session count — the quantity
+   * the process-level `maxTotalSessions` admission compares (issue
+   * #6378). Runtimes whose bridge fakes omit `sessionCreationLoad`
+   * contribute 0.
+   */
+  totalSessionCreationLoad(): number {
+    let total = 0;
+    for (const runtime of this.byKey.values()) {
+      total += runtime.bridge.sessionCreationLoad ?? 0;
+    }
+    return total;
+  }
+
+  /**
    * Resolve a workspace selector to a runtime. `undefined` means "the
    * caller sent no selector" and falls back to the primary — the legacy
    * single-workspace contract.

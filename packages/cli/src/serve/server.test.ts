@@ -411,6 +411,8 @@ interface FakeBridgeOpts {
   ) => boolean;
   listImpl?: (workspaceCwd: string) => BridgeSessionSummary[];
   summaryImpl?: (sessionId: string) => BridgeSessionSummary;
+  /** Live+in-flight count reported to the maxTotalSessions admission. */
+  sessionCreationLoadImpl?: () => number;
   getSessionArtifactsImpl?: AcpSessionBridge['getSessionArtifacts'];
   addSessionArtifactImpl?: AcpSessionBridge['addSessionArtifact'];
   removeSessionArtifactImpl?: AcpSessionBridge['removeSessionArtifact'];
@@ -596,6 +598,8 @@ interface FakeBridge extends AcpSessionBridge {
   calls: BridgeSpawnRequest[];
   loadCalls: BridgeRestoreSessionRequest[];
   resumeCalls: BridgeRestoreSessionRequest[];
+  /** Admission hook createServeApp installed via setFreshSessionAdmission. */
+  freshSessionAdmission: (() => void) | undefined;
   promptCalls: Array<{
     sessionId: string;
     req: PromptRequest;
@@ -1351,6 +1355,15 @@ function fakeBridge(opts: FakeBridgeOpts = {}): FakeBridge {
     },
     get sessionCount() {
       return calls.length;
+    },
+    get sessionCreationLoad() {
+      return opts.sessionCreationLoadImpl
+        ? opts.sessionCreationLoadImpl()
+        : calls.length;
+    },
+    freshSessionAdmission: undefined,
+    setFreshSessionAdmission(hook) {
+      this.freshSessionAdmission = hook;
     },
     get activePromptCount() {
       return 0;
@@ -14199,6 +14212,96 @@ describe('multi-workspace session dispatch (issue #6378, Phase 2a)', () => {
       .set('Host', `127.0.0.1:${baseOpts.port}`);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('workspace_mismatch');
+  });
+
+  describe('maxTotalSessions admission', () => {
+    const buildCappedApp = (
+      primary: FakeBridge,
+      secondary: FakeBridge,
+      caps: { maxSessions?: number; maxTotalSessions?: number },
+    ) =>
+      createServeApp({ ...baseOpts, workspace: WS_BOUND, ...caps }, undefined, {
+        bridge: primary,
+        additionalRuntimes: [
+          {
+            key: WS_OTHER,
+            bridge: secondary,
+          } as unknown as import('./workspace-registry.js').WorkspaceRuntime,
+        ],
+      });
+
+    it('installs the admission hook on every runtime bridge', () => {
+      const primary = fakeBridge();
+      const secondary = fakeBridge();
+      buildCappedApp(primary, secondary, { maxSessions: 2 });
+      expect(primary.freshSessionAdmission).toBeTypeOf('function');
+      expect(secondary.freshSessionAdmission).toBeTypeOf('function');
+      // Both runtimes share ONE hook instance (one process-level cap).
+      expect(primary.freshSessionAdmission).toBe(
+        secondary.freshSessionAdmission,
+      );
+    });
+
+    it('defaults the total cap to maxSessions × workspaceCount', () => {
+      let primaryLoad = 0;
+      let secondaryLoad = 0;
+      const primary = fakeBridge({
+        sessionCreationLoadImpl: () => primaryLoad,
+      });
+      const secondary = fakeBridge({
+        sessionCreationLoadImpl: () => secondaryLoad,
+      });
+      buildCappedApp(primary, secondary, { maxSessions: 2 });
+      const admit = primary.freshSessionAdmission!;
+
+      primaryLoad = 2;
+      secondaryLoad = 1;
+      expect(() => admit()).not.toThrow();
+
+      secondaryLoad = 2;
+      expect(() => admit()).toThrow(SessionLimitExceededError);
+      expect(() => admit()).toThrow(/4/);
+    });
+
+    it('honors an explicit lower maxTotalSessions', () => {
+      let load = 0;
+      const primary = fakeBridge({ sessionCreationLoadImpl: () => load });
+      const secondary = fakeBridge({ sessionCreationLoadImpl: () => 0 });
+      buildCappedApp(primary, secondary, {
+        maxSessions: 5,
+        maxTotalSessions: 3,
+      });
+      const admit = primary.freshSessionAdmission!;
+
+      load = 2;
+      expect(() => admit()).not.toThrow();
+      load = 3;
+      expect(() => admit()).toThrow(SessionLimitExceededError);
+    });
+
+    it('maxTotalSessions: 0 disables the total cap entirely', () => {
+      const primary = fakeBridge();
+      const secondary = fakeBridge();
+      buildCappedApp(primary, secondary, {
+        maxSessions: 2,
+        maxTotalSessions: 0,
+      });
+      expect(primary.freshSessionAdmission).toBeUndefined();
+      expect(secondary.freshSessionAdmission).toBeUndefined();
+    });
+
+    it('advertises both caps on /capabilities limits', async () => {
+      const app = buildCappedApp(fakeBridge(), fakeBridge(), {
+        maxSessions: 2,
+        maxTotalSessions: 3,
+      });
+      const res = await request(app)
+        .get('/capabilities')
+        .set('Host', `127.0.0.1:${baseOpts.port}`);
+      expect(res.status).toBe(200);
+      expect(res.body.limits.maxSessionsPerWorkspace).toBe(2);
+      expect(res.body.limits.maxTotalSessions).toBe(3);
+    });
   });
 });
 

@@ -24,6 +24,9 @@ interface RegisterCapabilitiesRoutesDeps {
   workspaceRegistry: WorkspaceRegistry;
   permissionPolicy: AcpSessionBridge['permissionPolicy'];
   maxPendingPromptsPerSession: ServeOptions['maxPendingPromptsPerSession'];
+  /** Normalized caps (issue #6378); `Infinity` = uncapped → advertised as null. */
+  maxSessionsPerWorkspace: number;
+  maxTotalSessions: number;
   languageCodes: string[];
 }
 
@@ -58,6 +61,12 @@ export function registerCapabilitiesRoutes(
         maxPendingPromptsPerSession: advertisedMaxPendingPromptsPerSession(
           deps.maxPendingPromptsPerSession,
         ),
+        maxSessionsPerWorkspace:
+          deps.maxSessionsPerWorkspace === Infinity
+            ? null
+            : deps.maxSessionsPerWorkspace,
+        maxTotalSessions:
+          deps.maxTotalSessions === Infinity ? null : deps.maxTotalSessions,
       },
       supportedLanguages: deps.languageCodes,
     };

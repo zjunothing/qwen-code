@@ -592,6 +592,7 @@ describe('serve fast path argument parsing', () => {
       ['hostname', ['--hostname', '127.0.0.1']],
       ['token', ['--token', 'token']],
       ['max-sessions', ['--max-sessions', '10']],
+      ['max-total-sessions', ['--max-total-sessions', '40']],
       [
         'max-pending-prompts-per-session',
         ['--max-pending-prompts-per-session', '5'],

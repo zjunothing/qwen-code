@@ -1065,6 +1065,12 @@ export function createAcpSessionBridge(opts: BridgeOptions): AcpSessionBridge {
   } else {
     maxSessions = opts.maxSessions;
   }
+  // Process-level fresh-session admission (issue #6378). Installed by the
+  // serve layer after all workspace runtimes exist; invoked synchronously
+  // at each fresh-session gate below, right after the per-workspace
+  // `maxSessions` check. Throws to refuse — same propagation path as
+  // `SessionLimitExceededError`.
+  let admitFreshSession: (() => void) | undefined;
   if (defaultSessionScope !== 'single' && defaultSessionScope !== 'thread') {
     throw new TypeError(
       `Invalid sessionScope: ${JSON.stringify(defaultSessionScope)}. ` +
@@ -2837,6 +2843,7 @@ export function createAcpSessionBridge(opts: BridgeOptions): AcpSessionBridge {
     ) {
       throw new SessionLimitExceededError(maxSessions);
     }
+    admitFreshSession?.();
 
     const restoreEvents = createSessionEventBus();
     let registeredEntry: SessionEntry | undefined;
@@ -3224,6 +3231,16 @@ export function createAcpSessionBridge(opts: BridgeOptions): AcpSessionBridge {
       return byId.size;
     },
 
+    get sessionCreationLoad() {
+      // The exact quantity the fresh-session gates compare against
+      // `maxSessions`; summed across runtimes for `maxTotalSessions`.
+      return byId.size + inFlightSpawns.size + inFlightRestores.size;
+    },
+
+    setFreshSessionAdmission(hook) {
+      admitFreshSession = hook;
+    },
+
     get pendingPromptTotal() {
       // Queue-depth gauge for the Daemon Status "Queued" chart: count only
       // prompts still waiting in the per-session FIFO (`state === 'queued'`),
@@ -3432,6 +3449,7 @@ export function createAcpSessionBridge(opts: BridgeOptions): AcpSessionBridge {
       ) {
         throw new SessionLimitExceededError(maxSessions);
       }
+      admitFreshSession?.();
 
       const promise = doSpawn(req.modelServiceId, effectiveScope, req.clientId);
       // Track in-flight spawns regardless of scope. Under `single`
@@ -4165,6 +4183,7 @@ export function createAcpSessionBridge(opts: BridgeOptions): AcpSessionBridge {
         ) {
           throw new SessionLimitExceededError(maxSessions);
         }
+        admitFreshSession?.();
 
         const ci = await ensureChannel();
         const result = (await withTimeout(

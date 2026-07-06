@@ -40,6 +40,7 @@ import { CdpTunnelRegistry } from './cdp-tunnel/cdp-tunnel-registry.js';
 import {
   canonicalizeWorkspace,
   createAcpSessionBridge,
+  SessionLimitExceededError,
   type AcpSessionBridge,
 } from './acp-session-bridge.js';
 import {
@@ -492,6 +493,36 @@ export function createServeApp(
   ]);
   (app.locals as { workspaceRegistry?: WorkspaceRegistry }).workspaceRegistry =
     workspaceRegistry;
+
+  // Process-level session cap (issue #6378, Phase 2a). `maxSessions`
+  // stays the per-workspace cap each bridge enforces itself; the total
+  // cap bounds the sum across runtimes and defaults to
+  // `maxSessions × workspaceCount` so existing capacity expectations
+  // hold. Enforced via the bridges' fresh-session admission hook —
+  // synchronous check at the same gate as the per-workspace cap, so two
+  // workspaces racing session creation cannot jointly overshoot; attach
+  // requests never reach the hook.
+  const normalizeSessionCap = (value: number | undefined): number =>
+    value === undefined || value === 0 || value === Infinity ? Infinity : value;
+  // Mirrors the bridge's DEFAULT_MAX_SESSIONS fallback for undefined.
+  const maxSessionsPerWorkspace =
+    opts.maxSessions === undefined ? 20 : normalizeSessionCap(opts.maxSessions);
+  const maxTotalSessions =
+    opts.maxTotalSessions !== undefined
+      ? normalizeSessionCap(opts.maxTotalSessions)
+      : maxSessionsPerWorkspace === Infinity
+        ? Infinity
+        : maxSessionsPerWorkspace * workspaceRegistry.list().length;
+  if (maxTotalSessions !== Infinity) {
+    const admitFreshSession = () => {
+      if (workspaceRegistry.totalSessionCreationLoad() >= maxTotalSessions) {
+        throw new SessionLimitExceededError(maxTotalSessions);
+      }
+    };
+    for (const runtime of workspaceRegistry.list()) {
+      runtime.bridge.setFreshSessionAdmission?.(admitFreshSession);
+    }
+  }
   // Order matters: rejection guards (CORS / Host allowlist / bearer auth)
   // run BEFORE the JSON body parser. Otherwise an unauthenticated POST
   // gets a full 10MB `JSON.parse` before the 401 fires — a trivially
@@ -626,6 +657,8 @@ export function createServeApp(
     workspaceRegistry,
     permissionPolicy: bridge.permissionPolicy,
     maxPendingPromptsPerSession: opts.maxPendingPromptsPerSession,
+    maxSessionsPerWorkspace,
+    maxTotalSessions,
     languageCodes,
   });
 

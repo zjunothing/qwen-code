@@ -159,6 +159,13 @@ export const serveCommand: CommandModule<unknown, ServeArgs> = {
           'Cap on concurrent live sessions. New spawn requests beyond this return 503; ' +
           'attach to existing sessions still works. Set to 0 to disable.',
       })
+      .option('max-total-sessions', {
+        type: 'number',
+        description:
+          'Process-level cap on live sessions across all registered workspaces ' +
+          '(issue #6378). Defaults to --max-sessions × workspace count. ' +
+          'Set to 0 to disable.',
+      })
       .option('max-pending-prompts-per-session', {
         type: 'number',
         default: 5,
@@ -543,6 +550,9 @@ export const serveCommand: CommandModule<unknown, ServeArgs> = {
         token: argv.token,
         mode: 'http-bridge',
         maxSessions: argv['max-sessions'],
+        ...(typeof argv['max-total-sessions'] === 'number'
+          ? { maxTotalSessions: argv['max-total-sessions'] }
+          : {}),
         maxPendingPromptsPerSession,
         maxConnections: argv['max-connections'],
         eventRingSize: argv['event-ring-size'],

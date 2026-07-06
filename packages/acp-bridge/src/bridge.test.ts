@@ -36,6 +36,7 @@ import {
   SessionShellClientRequiredError,
   SessionShellDisabledError,
   SessionBusyError,
+  SessionLimitExceededError,
   SessionNotFoundError,
   WorkspaceMismatchError,
 } from './bridgeErrors.js';
@@ -9206,6 +9207,55 @@ describe('createAcpSessionBridge', () => {
       await expect(
         bridge.spawnOrAttach({ workspaceCwd: WS_B }),
       ).rejects.toBeInstanceOf(WorkspaceMismatchError);
+
+      await bridge.shutdown();
+    });
+
+    it('consults the fresh-session admission hook on spawns but not attaches (issue #6378)', async () => {
+      let n = 0;
+      const factory: ChannelFactory = async () =>
+        makeChannel({ sessionIdPrefix: `s${n++}` }).channel;
+      const bridge = makeBridge({
+        channelFactory: factory,
+        maxSessions: 5,
+        sessionScope: 'single',
+      });
+      let hookCalls = 0;
+      let refuse = false;
+      bridge.setFreshSessionAdmission?.(() => {
+        hookCalls++;
+        if (refuse) throw new SessionLimitExceededError(3);
+      });
+
+      const a = await bridge.spawnOrAttach({ workspaceCwd: WS_A });
+      expect(a.attached).toBe(false);
+      expect(hookCalls).toBe(1);
+      expect(bridge.sessionCreationLoad).toBe(1);
+
+      // Attach to the existing session must NOT consult the hook.
+      const b = await bridge.spawnOrAttach({ workspaceCwd: WS_A });
+      expect(b.attached).toBe(true);
+      expect(hookCalls).toBe(1);
+
+      // Refusal propagates like the per-workspace cap and registers
+      // nothing (thread scope forces a fresh spawn attempt).
+      refuse = true;
+      await expect(
+        bridge.spawnOrAttach({ workspaceCwd: WS_A, sessionScope: 'thread' }),
+      ).rejects.toMatchObject({
+        name: 'SessionLimitExceededError',
+        limit: 3,
+      });
+      expect(bridge.sessionCount).toBe(1);
+
+      // Clearing the hook restores per-workspace-cap-only behavior.
+      bridge.setFreshSessionAdmission?.(undefined);
+      const c = await bridge.spawnOrAttach({
+        workspaceCwd: WS_A,
+        sessionScope: 'thread',
+      });
+      expect(c.attached).toBe(false);
+      expect(bridge.sessionCount).toBe(2);
 
       await bridge.shutdown();
     });
