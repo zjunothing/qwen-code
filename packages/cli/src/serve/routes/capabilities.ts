@@ -14,12 +14,14 @@ import {
   type CapabilitiesEnvelope,
   type ServeOptions,
 } from '../types.js';
+import type { WorkspaceRegistry } from '../workspace-registry.js';
 
 interface RegisterCapabilitiesRoutesDeps {
   qwenCodeVersion?: string;
   mode: ServeOptions['mode'];
   currentServeFeatures: () => ReturnType<typeof getAdvertisedServeFeatures>;
   boundWorkspace: string;
+  workspaceRegistry: WorkspaceRegistry;
   permissionPolicy: AcpSessionBridge['permissionPolicy'];
   maxPendingPromptsPerSession: ServeOptions['maxPendingPromptsPerSession'];
   languageCodes: string[];
@@ -42,6 +44,11 @@ export function registerCapabilitiesRoutes(
       // Surface the bound workspace so clients can detect mismatch pre-flight
       // and omit `cwd` on `POST /session`.
       workspaceCwd: deps.boundWorkspace,
+      // All registered workspaces (issue #6378). Single-workspace daemons
+      // emit one primary entry equal to `workspaceCwd`.
+      workspaces: deps.workspaceRegistry
+        .list()
+        .map((r) => ({ cwd: r.key, primary: r.isPrimary })),
       // Advertise supported transport families so SDK clients can
       // auto-negotiate the best available transport via negotiateTransport().
       transports: ['rest'],

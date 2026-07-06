@@ -294,6 +294,14 @@ export interface CapabilitiesEnvelope {
    */
   workspaceCwd?: string;
   /**
+   * Workspaces registered on this daemon (issue #6378). Additive: older
+   * daemons omit it; single-workspace daemons emit one primary entry that
+   * matches `workspaceCwd`. Clients pick a workspace by passing its `cwd`
+   * on `POST /session`; workspace-less legacy routes stay bound to the
+   * primary entry.
+   */
+  workspaces?: Array<{ cwd: string; primary: boolean }>;
+  /**
    * Transport families this daemon supports. Always includes `'rest'`;
    * future builds may add `'acp-http'` and/or `'acp-ws'`. SDK clients
    * use `negotiateTransport()` to auto-select the best available.

@@ -61,10 +61,12 @@ import {
   sessionExportFormatValues,
 } from '../server/session-export.js';
 import { createSessionOrganizationService } from '../session-organization-helpers.js';
+import type { WorkspaceRegistry } from '../workspace-registry.js';
 
 interface RegisterSessionRoutesDeps {
   boundWorkspace: string;
   bridge: AcpSessionBridge;
+  registry: WorkspaceRegistry;
   archiveCoordinator: SessionArchiveCoordinator;
   mutate: (opts?: { strict?: boolean }) => RequestHandler;
   sendBridgeError: SendBridgeError;
@@ -116,6 +118,7 @@ export function registerSessionRoutes(
   const {
     boundWorkspace,
     bridge,
+    registry,
     archiveCoordinator,
     mutate,
     sendBridgeError,
@@ -124,6 +127,16 @@ export function registerSessionRoutes(
     sessionShellCommandEnabled,
   } = deps;
   const LANGUAGE_CODES = deps.languageCodes;
+
+  // Multi-workspace dispatch (issue #6378, Phase 2a). Registered
+  // workspaces route to their own runtime's bridge; everything else keeps
+  // the primary `bridge`, whose bound-workspace validation preserves the
+  // legacy `workspace_mismatch` behavior for unknown paths, and
+  // `session_not_found` for unknown session ids.
+  const bridgeForCwd = (cwd: string): AcpSessionBridge =>
+    registry.tryResolveWorkspace(cwd)?.bridge ?? bridge;
+  const bridgeForSession = (sessionId: string): AcpSessionBridge =>
+    registry.resolveSession(sessionId)?.bridge ?? bridge;
 
   const parseSessionIdsBody = (
     req: Request,
@@ -223,8 +236,9 @@ export function registerSessionRoutes(
     }
     const clientId = parseClientIdHeader(req, res);
     if (clientId === null) return;
+    const targetBridge = bridgeForCwd(cwd);
     try {
-      const session = await bridge.spawnOrAttach({
+      const session = await targetBridge.spawnOrAttach({
         workspaceCwd: cwd,
         modelServiceId,
         ...(clientId !== undefined ? { clientId } : {}),
@@ -275,7 +289,7 @@ export function registerSessionRoutes(
           // dispatching, the bridge will see `attachCount > 0` and
           // skip the kill. Without the flag, that second client's
           // session would die mid-prompt.
-          bridge
+          targetBridge
             .killSession(session.sessionId, { requireZeroAttaches: true })
             .catch(() => {
               // Best-effort cleanup; channel.exited will eventually reap.
@@ -290,9 +304,11 @@ export function registerSessionRoutes(
           // subscribers). Without this, both-coalesced-callers-
           // disconnect leaves an orphan agent child no client knows
           // the id of.
-          bridge.detachClient(session.sessionId, session.clientId).catch(() => {
-            // Best-effort cleanup; channel.exited will eventually reap.
-          });
+          targetBridge
+            .detachClient(session.sessionId, session.clientId)
+            .catch(() => {
+              // Best-effort cleanup; channel.exited will eventually reap.
+            });
         }
         return;
       }
@@ -311,19 +327,20 @@ export function registerSessionRoutes(
       if (cwd === undefined) return;
       const clientId = parseClientIdHeader(req, res);
       if (clientId === null) return;
+      const targetBridge = bridgeForCwd(cwd);
       try {
         const session = await archiveCoordinator.runSharedMany(
           [sessionId],
           async () => {
             await assertSessionLoadable(cwd, sessionId);
             return action === 'load'
-              ? await bridge.loadSession({
+              ? await targetBridge.loadSession({
                   sessionId,
                   workspaceCwd: cwd,
                   historyReplay: 'response',
                   ...(clientId !== undefined ? { clientId } : {}),
                 })
-              : await bridge.resumeSession({
+              : await targetBridge.resumeSession({
                   sessionId,
                   workspaceCwd: cwd,
                   ...(clientId !== undefined ? { clientId } : {}),
@@ -825,7 +842,8 @@ export function registerSessionRoutes(
         const forwardedBody = { ...body };
         delete forwardedBody['deadlineMs'];
 
-        const lastEventId = bridge.getSessionLastEventId(sessionId);
+        const sessionBridge = bridgeForSession(sessionId);
+        const lastEventId = sessionBridge.getSessionLastEventId(sessionId);
         addDaemonRequestAttribute('qwen-code.prompt_id', promptId);
 
         const abort = new AbortController();
@@ -855,7 +873,7 @@ export function registerSessionRoutes(
 
         let promptPromise: ReturnType<AcpSessionBridge['sendPrompt']>;
         try {
-          promptPromise = bridge.sendPrompt(
+          promptPromise = sessionBridge.sendPrompt(
             sessionId,
             {
               ...forwardedBody,
@@ -967,7 +985,7 @@ export function registerSessionRoutes(
         const body = safeBody(req);
         const clientId = parseClientIdHeader(req, res);
         if (clientId === null) return;
-        await bridge.cancelSession(
+        await bridgeForSession(sessionId).cancelSession(
           sessionId,
           {
             ...(body as object),
@@ -1290,9 +1308,12 @@ export function registerSessionRoutes(
       return;
     }
     // Reject cross-workspace queries so orchestrators don't mistake
-    // "no sessions here" for "workspace is idle".
+    // "no sessions here" for "workspace is idle". Any registered
+    // workspace is queryable (issue #6378, Phase 2a); unregistered
+    // paths keep the legacy mismatch error.
     const key = canonicalizeWorkspace(workspaceCwd);
-    if (key !== boundWorkspace) {
+    const runtime = registry.tryResolveWorkspace(key);
+    if (!runtime) {
       res.status(400).json({
         error: `Workspace mismatch: daemon is bound to "${boundWorkspace}"`,
         code: 'workspace_mismatch',
@@ -1343,13 +1364,17 @@ export function registerSessionRoutes(
         }
         archiveState = rawArchiveState;
       }
-      const result = await listWorkspaceSessionsForResponse(bridge, key, {
-        ...(cursor !== undefined ? { cursor } : {}),
-        ...(size !== undefined ? { size } : {}),
-        ...(archiveState !== undefined ? { archiveState } : {}),
-        ...(view !== undefined ? { view } : {}),
-        ...(group !== undefined ? { group } : {}),
-      });
+      const result = await listWorkspaceSessionsForResponse(
+        runtime.bridge,
+        key,
+        {
+          ...(cursor !== undefined ? { cursor } : {}),
+          ...(size !== undefined ? { size } : {}),
+          ...(archiveState !== undefined ? { archiveState } : {}),
+          ...(view !== undefined ? { view } : {}),
+          ...(group !== undefined ? { group } : {}),
+        },
+      );
       res.status(200).json({
         sessions: result.sessions,
         ...(result.nextCursor != null ? { nextCursor: result.nextCursor } : {}),

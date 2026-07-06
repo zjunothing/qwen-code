@@ -21,6 +21,7 @@ import {
   parseLastEventId,
   parseMaxQueuedQuery,
 } from '../server/request-helpers.js';
+import type { WorkspaceRegistry } from '../workspace-registry.js';
 
 let activeSseCount = 0;
 
@@ -30,6 +31,7 @@ export function getActiveSseCount(): number {
 
 interface RegisterSseEventsRoutesDeps {
   bridge: AcpSessionBridge;
+  registry: WorkspaceRegistry;
   daemonLog?: DaemonLogger;
   writerIdleTimeoutMs?: number;
   sendBridgeError: SendBridgeError;
@@ -76,10 +78,15 @@ export function registerSseEventsRoutes(
   app: Application,
   deps: RegisterSseEventsRoutesDeps,
 ): void {
-  const { bridge, daemonLog, sendBridgeError, writerIdleTimeoutMs } = deps;
+  const { bridge, registry, daemonLog, sendBridgeError, writerIdleTimeoutMs } =
+    deps;
 
   app.get('/session/:id/events', (req, res) => {
     const sessionId = req.params['id'];
+    // Multi-workspace dispatch (issue #6378, Phase 2a): subscribe on the
+    // runtime that owns the session; unknown ids keep the primary bridge's
+    // session_not_found behavior.
+    const sessionBridge = registry.resolveSession(sessionId)?.bridge ?? bridge;
     const lastEventId = parseLastEventId(req.headers['last-event-id']);
     const maxQueued = parseMaxQueuedQuery(req.query['maxQueued'], res);
     // `parseMaxQueuedQuery` sends its own 400 + JSON body on rejection
@@ -92,7 +99,7 @@ export function registerSseEventsRoutes(
     const abort = new AbortController();
     try {
       const snapshot = req.query['snapshot'] === '1';
-      const iterable = bridge.subscribeEvents(sessionId, {
+      const iterable = sessionBridge.subscribeEvents(sessionId, {
         signal: abort.signal,
         lastEventId,
         ...(maxQueued !== undefined ? { maxQueued } : {}),

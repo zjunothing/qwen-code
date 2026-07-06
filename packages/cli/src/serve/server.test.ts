@@ -84,9 +84,10 @@ import {
   type AcpSessionBridge,
   type SessionMetadataUpdate,
 } from './acp-session-bridge.js';
-import type {
-  BridgeEvent,
-  SubscribeOptions,
+import {
+  SubscriberLimitExceededError,
+  type BridgeEvent,
+  type SubscribeOptions,
 } from '@qwen-code/acp-bridge/eventBus';
 import type {
   ServeSessionContextStatus,
@@ -14043,6 +14044,161 @@ describe('createServeApp workspace registry wiring (issue #6378, Phase 1)', () =
       (app.locals as { fsFactory?: unknown }).fsFactory,
     );
     expect(registry!.resolveWorkspace(undefined)).toBe(registry!.primary);
+  });
+});
+
+describe('multi-workspace session dispatch (issue #6378, Phase 2a)', () => {
+  const WS_OTHER = path.resolve(path.sep, 'work', 'other');
+  const SESS_OTHER = 'sess-on-other';
+
+  // Only the sessions surface touches additional runtimes in Phase 2a, so
+  // a key + bridge stub is a sufficient runtime for these tests.
+  const buildMultiApp = (
+    primary: FakeBridge,
+    secondary: FakeBridge,
+  ): ReturnType<typeof createServeApp> =>
+    createServeApp({ ...baseOpts, workspace: WS_BOUND }, undefined, {
+      bridge: primary,
+      additionalRuntimes: [
+        {
+          key: WS_OTHER,
+          bridge: secondary,
+        } as unknown as import('./workspace-registry.js').WorkspaceRuntime,
+      ],
+    });
+
+  // Secondary-owned session: the registry's owner scan finds it via
+  // getSessionSummary (primary keeps the default not-found throw).
+  const secondaryOwning = () =>
+    fakeBridge({
+      summaryImpl: (sessionId) => {
+        if (sessionId !== SESS_OTHER) throw new SessionNotFoundError(sessionId);
+        return { sessionId } as unknown as BridgeSessionSummary;
+      },
+    });
+
+  it('advertises every registered workspace on /capabilities', async () => {
+    const app = buildMultiApp(fakeBridge(), fakeBridge());
+    const res = await request(app)
+      .get('/capabilities')
+      .set('Host', `127.0.0.1:${baseOpts.port}`);
+    expect(res.status).toBe(200);
+    expect(res.body.workspaces).toEqual([
+      { cwd: WS_BOUND, primary: true },
+      { cwd: WS_OTHER, primary: false },
+    ]);
+  });
+
+  it('POST /session routes a registered non-primary cwd to its runtime bridge', async () => {
+    const primary = fakeBridge();
+    const secondary = fakeBridge();
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .post('/session')
+      .set('Host', `127.0.0.1:${baseOpts.port}`)
+      .send({ cwd: WS_OTHER });
+    expect(res.status).toBe(200);
+    expect(secondary.calls).toHaveLength(1);
+    expect(secondary.calls[0]?.workspaceCwd).toBe(WS_OTHER);
+    expect(primary.calls).toHaveLength(0);
+  });
+
+  it('POST /session without cwd stays on the primary bridge', async () => {
+    const primary = fakeBridge();
+    const secondary = fakeBridge();
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .post('/session')
+      .set('Host', `127.0.0.1:${baseOpts.port}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(primary.calls).toHaveLength(1);
+    expect(secondary.calls).toHaveLength(0);
+  });
+
+  it('POST /session/:id/prompt dispatches to the owning runtime', async () => {
+    const primary = fakeBridge();
+    const secondary = secondaryOwning();
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .post(`/session/${SESS_OTHER}/prompt`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`)
+      .send({ prompt: [{ type: 'text', text: 'hi' }] });
+    expect(res.status).toBe(202);
+    expect(secondary.promptCalls).toHaveLength(1);
+    expect(primary.promptCalls).toHaveLength(0);
+  });
+
+  it('POST /session/:id/cancel dispatches to the owning runtime', async () => {
+    const primary = fakeBridge();
+    const secondary = secondaryOwning();
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .post(`/session/${SESS_OTHER}/cancel`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`)
+      .send({});
+    expect(res.status).toBe(204);
+    expect(secondary.cancelCalls).toHaveLength(1);
+    expect(primary.cancelCalls).toHaveLength(0);
+  });
+
+  it('POST /session/:id/permission/:requestId dispatches to the owning runtime', async () => {
+    const primary = fakeBridge();
+    const secondary = secondaryOwning();
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .post(`/session/${SESS_OTHER}/permission/req-1`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`)
+      .send({ outcome: { outcome: 'selected', optionId: 'allow' } });
+    expect(res.status).toBe(200);
+    expect(secondary.sessionPermissionVotes).toHaveLength(1);
+    expect(primary.sessionPermissionVotes).toHaveLength(0);
+  });
+
+  it('GET /session/:id/events subscribes on the owning runtime', async () => {
+    const primary = fakeBridge();
+    // Proof-of-dispatch without holding a live SSE stream open: the
+    // owning bridge rejects with the subscriber cap, which the route
+    // maps to 429. The primary bridge would 404 (session_not_found).
+    const secondary = fakeBridge({
+      summaryImpl: (sessionId) => {
+        if (sessionId !== SESS_OTHER) throw new SessionNotFoundError(sessionId);
+        return { sessionId } as unknown as BridgeSessionSummary;
+      },
+      subscribeImpl: () => {
+        throw new SubscriberLimitExceededError(64);
+      },
+    });
+    const app = buildMultiApp(primary, secondary);
+    const res = await request(app)
+      .get(`/session/${SESS_OTHER}/events`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`);
+    expect(res.status).toBe(429);
+  });
+
+  it('GET /workspace/:id/sessions lists a registered non-primary workspace', async () => {
+    const primary = fakeBridge();
+    const secondary = fakeBridge();
+    const app = buildMultiApp(primary, secondary);
+    const encoded = encodeURIComponent(WS_OTHER);
+    const res = await request(app)
+      .get(`/workspace/${encoded}/sessions`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`);
+    expect(res.status).toBe(200);
+    expect(secondary.listCalls).toEqual([WS_OTHER]);
+    expect(primary.listCalls).toHaveLength(0);
+  });
+
+  it('GET /workspace/:id/sessions still rejects unregistered workspaces', async () => {
+    const app = buildMultiApp(fakeBridge(), fakeBridge());
+    const encoded = encodeURIComponent(
+      path.resolve(path.sep, 'work', 'unregistered'),
+    );
+    const res = await request(app)
+      .get(`/workspace/${encoded}/sessions`)
+      .set('Host', `127.0.0.1:${baseOpts.port}`);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('workspace_mismatch');
   });
 });
 

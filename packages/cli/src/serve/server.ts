@@ -116,7 +116,10 @@ import { installSelfOriginStripMiddleware } from './server/self-origin.js';
 import { registerWorkspaceLifecycleRoutes } from './routes/workspace-lifecycle.js';
 import { registerWorkspaceMcpControlRoutes } from './routes/workspace-mcp-control.js';
 import { registerWorkspaceToolsRoutes } from './routes/workspace-tools.js';
-import { WorkspaceRegistry } from './workspace-registry.js';
+import {
+  WorkspaceRegistry,
+  type WorkspaceRuntime,
+} from './workspace-registry.js';
 
 export {
   createDefaultFsAuditEmit,
@@ -259,6 +262,16 @@ export interface ServeAppDeps {
    */
   clientMcpSenderRegistry?: ClientMcpSenderRegistry;
   voiceTranscriber?: WorkspaceVoiceRouteDeps['transcribe'];
+  /**
+   * Additional workspace runtimes to register alongside the primary
+   * (issue #6378, Phase 2a). Each entry must be pre-built with its own
+   * bridge / workspace service / fs factory bound to `key`. Only the
+   * sessions surface dispatches to these runtimes; every other route
+   * stays primary-only until later phases. Production `runQwenServe`
+   * does not populate this yet (multi-workspace boot is gated); tests
+   * and direct embeds inject here.
+   */
+  additionalRuntimes?: ReadonlyArray<Omit<WorkspaceRuntime, 'isPrimary'>>;
 }
 
 /**
@@ -457,10 +470,12 @@ export function createServeApp(
       },
     });
 
-  // Workspace registry (issue #6378, Phase 1): wrap the single bound
-  // workspace's services as the primary runtime. Routes resolve workspace
-  // ownership through this seam; the multi-workspace phases register
-  // additional runtimes here without re-threading every dependency.
+  // Workspace registry (issue #6378): wrap the single bound workspace's
+  // services as the primary runtime. Routes resolve workspace ownership
+  // through this seam; `deps.additionalRuntimes` registers extra
+  // workspaces (Phase 2a sessions-only scope) without re-threading every
+  // dependency. Production stays single-runtime until the multi-workspace
+  // boot gate in `runQwenServe` is removed.
   const workspaceRegistry = new WorkspaceRegistry([
     {
       key: boundWorkspace,
@@ -470,6 +485,10 @@ export function createServeApp(
       fsFactory,
       clientMcpSenderRegistry,
     },
+    ...(deps.additionalRuntimes ?? []).map((runtime) => ({
+      ...runtime,
+      isPrimary: false,
+    })),
   ]);
   (app.locals as { workspaceRegistry?: WorkspaceRegistry }).workspaceRegistry =
     workspaceRegistry;
@@ -604,6 +623,7 @@ export function createServeApp(
     mode: opts.mode,
     currentServeFeatures,
     boundWorkspace,
+    workspaceRegistry,
     permissionPolicy: bridge.permissionPolicy,
     maxPendingPromptsPerSession: opts.maxPendingPromptsPerSession,
     languageCodes,
@@ -765,6 +785,7 @@ export function createServeApp(
   registerSessionRoutes(app, {
     boundWorkspace,
     bridge,
+    registry: workspaceRegistry,
     archiveCoordinator,
     mutate,
     sendBridgeError,
@@ -816,12 +837,14 @@ export function createServeApp(
 
   registerPermissionRoutes(app, {
     bridge,
+    registry: workspaceRegistry,
     mutate,
     sendPermissionVoteError,
   });
 
   registerSseEventsRoutes(app, {
     bridge,
+    registry: workspaceRegistry,
     daemonLog,
     writerIdleTimeoutMs: opts.writerIdleTimeoutMs,
     sendBridgeError,

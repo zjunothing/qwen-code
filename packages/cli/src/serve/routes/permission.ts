@@ -11,6 +11,7 @@ import {
   parseClientIdHeader,
   parsePermissionVoteBody,
 } from '../server/request-helpers.js';
+import type { WorkspaceRegistry } from '../workspace-registry.js';
 
 type SendPermissionVoteError = (
   res: Response,
@@ -20,6 +21,7 @@ type SendPermissionVoteError = (
 
 interface RegisterPermissionRoutesDeps {
   bridge: AcpSessionBridge;
+  registry: WorkspaceRegistry;
   mutate: (opts?: { strict?: boolean }) => RequestHandler;
   sendPermissionVoteError: SendPermissionVoteError;
 }
@@ -28,7 +30,7 @@ export function registerPermissionRoutes(
   app: Application,
   deps: RegisterPermissionRoutesDeps,
 ): void {
-  const { bridge, mutate, sendPermissionVoteError } = deps;
+  const { bridge, registry, mutate, sendPermissionVoteError } = deps;
 
   app.post('/session/:id/permission/:requestId', mutate(), (req, res) => {
     const sessionId = req.params['id'];
@@ -46,7 +48,12 @@ export function registerPermissionRoutes(
     };
     let accepted: boolean;
     try {
-      accepted = bridge.respondToSessionPermission(
+      // Multi-workspace dispatch (issue #6378, Phase 2a): vote on the
+      // runtime that owns the session; unknown ids keep the primary
+      // bridge's not-found behavior.
+      const sessionBridge =
+        registry.resolveSession(sessionId)?.bridge ?? bridge;
+      accepted = sessionBridge.respondToSessionPermission(
         sessionId,
         requestId,
         response,
