@@ -58,12 +58,16 @@ export function AddWorkspaceDialog({
   const [listOpen, setListOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   const [hostSep, setHostSep] = useState('/');
+  const [truncated, setTruncated] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listOpenRef = useRef(false);
   listOpenRef.current = listOpen && suggestions.length > 0;
   const suggestSeqRef = useRef(0);
-  // Set when a suggestion is accepted or the list is dismissed, so the
-  // path-change effect knows whether to reopen the list for that update.
+  // Set when the list is dismissed (Escape, blur). Consumed when a fetch
+  // RESOLVES — not when it is scheduled — so a dismissal issued during the
+  // debounce window also holds down the in-flight fetch instead of letting
+  // it reopen the list ~150ms later. Cleared again on any user input or
+  // accepted suggestion.
   const suppressNextFetchOpenRef = useRef(false);
 
   useEffect(() => {
@@ -85,16 +89,17 @@ export function AddWorkspaceDialog({
       return undefined;
     }
     const seq = ++suggestSeqRef.current;
-    const openOnResult = !suppressNextFetchOpenRef.current;
-    suppressNextFetchOpenRef.current = false;
     const timer = setTimeout(() => {
       onSuggest(path).then(
         (result) => {
           if (seq !== suggestSeqRef.current) return;
           setSuggestions(result.suggestions);
           setHostSep(result.sep || '/');
+          setTruncated(result.truncated === true);
           setHighlight(-1);
-          if (openOnResult || listOpenRef.current) {
+          const dismissed = suppressNextFetchOpenRef.current;
+          suppressNextFetchOpenRef.current = false;
+          if (!dismissed) {
             setListOpen(result.suggestions.length > 0);
           }
         },
@@ -117,6 +122,9 @@ export function AddWorkspaceDialog({
       if (event.key !== 'Escape' || !listOpenRef.current) return;
       if (event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
+      // Hold down any fetch already in flight during the debounce window so
+      // its resolution does not reopen the list the user just dismissed.
+      suppressNextFetchOpenRef.current = true;
       closeList();
     };
     window.addEventListener('keydown', handler, { capture: true });
@@ -227,6 +235,7 @@ export function AddWorkspaceDialog({
                 placeholder="/absolute/path/to/project"
                 value={path}
                 onChange={(e) => {
+                  suppressNextFetchOpenRef.current = false;
                   setPath(e.target.value);
                   if (error) setError(null);
                 }}
@@ -284,6 +293,14 @@ export function AddWorkspaceDialog({
                       <span className="text-muted-foreground">{hostSep}</span>
                     </li>
                   ))}
+                  {truncated && (
+                    <li
+                      aria-disabled="true"
+                      className="cursor-default px-3 py-1.5 text-xs text-muted-foreground"
+                    >
+                      {t('sidebar.addWorkspaceSuggestionsTruncated')}
+                    </li>
+                  )}
                 </ul>
               )}
             </div>

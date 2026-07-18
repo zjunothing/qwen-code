@@ -1515,6 +1515,21 @@ describe('GET /workspace-path-suggestions', () => {
     expect(res.body.code).toBe('invalid_prefix');
   });
 
+  it('caps suggestions at 50 entries and reports truncation', async () => {
+    const bigDir = join(base, 'bigdir');
+    await mkdir(bigDir);
+    for (let i = 0; i < 60; i++) {
+      await mkdir(join(bigDir, `dir-${String(i).padStart(2, '0')}`));
+    }
+    const { app } = createApp();
+    const res = await request(app)
+      .get('/workspace-path-suggestions')
+      .query({ prefix: `${bigDir}/` });
+    expect(res.status).toBe(200);
+    expect(res.body.suggestions).toHaveLength(50);
+    expect(res.body.truncated).toBe(true);
+  });
+
   it('rejects an over-long prefix before touching the filesystem', async () => {
     const { app } = createApp();
     const res = await request(app)

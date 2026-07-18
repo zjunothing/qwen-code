@@ -340,6 +340,61 @@ describe('AddWorkspaceDialog', () => {
       expect(onClose).not.toHaveBeenCalled();
     });
 
+    // Regression for the #7125 review: Escape pressed inside the debounce
+    // window must also hold down the in-flight fetch — previously the
+    // resolution ~150ms later reopened the list the user just dismissed.
+    it('keeps the list closed when Escape lands during the debounce window', async () => {
+      const onSuggest = vi.fn().mockResolvedValue(SUGGESTIONS);
+      mount(
+        <AddWorkspaceDialog
+          onClose={vi.fn()}
+          onAdd={vi.fn()}
+          onSuggest={onSuggest}
+        />,
+      );
+
+      type('/home/me/co');
+      await settle();
+      expect(listbox()).not.toBeNull();
+
+      // New keystroke schedules a fetch; Escape arrives before it resolves.
+      type('/home/me/cod');
+      keydown('Escape');
+      await settle();
+
+      expect(listbox()).toBeNull();
+
+      // Typing again re-enables suggestions.
+      type('/home/me/codi');
+      await settle();
+      expect(listbox()).not.toBeNull();
+    });
+
+    it('renders a truncation hint when the server capped the results', async () => {
+      const onSuggest = vi.fn().mockResolvedValue({
+        ...SUGGESTIONS,
+        truncated: true,
+      });
+      mount(
+        <AddWorkspaceDialog
+          onClose={vi.fn()}
+          onAdd={vi.fn()}
+          onSuggest={onSuggest}
+        />,
+      );
+
+      type('/home/me/co');
+      await settle();
+
+      expect(listbox()?.textContent).toContain('Showing the first 50 matches');
+      // The hint is not an option: keyboard navigation still cycles through
+      // the two real suggestions only.
+      keydown('ArrowDown');
+      keydown('ArrowDown');
+      keydown('ArrowDown');
+      expect(options()[0]?.getAttribute('aria-selected')).toBe('true');
+    });
+
     it('shows no list when the lookup fails', async () => {
       const onSuggest = vi.fn().mockRejectedValue(new Error('offline'));
       mount(

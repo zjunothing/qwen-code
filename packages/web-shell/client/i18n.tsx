@@ -857,6 +857,8 @@ const EN: Messages = {
   'sidebar.addWorkspaceAbsError': 'Path must be absolute',
   'sidebar.addWorkspaceHint': 'Enter the absolute path to a project directory.',
   'sidebar.addWorkspaceSuggestions': 'Directory suggestions',
+  'sidebar.addWorkspaceSuggestionsTruncated':
+    'Showing the first 50 matches — keep typing to narrow down.',
   'sidebar.addWorkspacePersist': 'Keep after daemon restart',
   'sidebar.addWorkspacePersistHint':
     'Persist this workspace registration in the daemon configuration.',
@@ -2934,6 +2936,8 @@ const ZH: Messages = {
   'sidebar.addWorkspaceAbsError': '路径必须是绝对路径',
   'sidebar.addWorkspaceHint': '请输入项目目录的绝对路径。',
   'sidebar.addWorkspaceSuggestions': '目录建议',
+  'sidebar.addWorkspaceSuggestionsTruncated':
+    '仅显示前 50 个匹配 — 继续输入以缩小范围。',
   'sidebar.addWorkspacePersist': '服务重启后保留',
   'sidebar.addWorkspacePersistHint': '将此工作区注册持久化到守护进程配置中。',
   'sidebar.addWorkspaceAdding': '添加中…',
